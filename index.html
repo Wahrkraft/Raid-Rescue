@@ -122,17 +122,18 @@ body{font-family:var(--f-ui);color:var(--text);-webkit-user-select:none;user-sel
       <tr><td>Fliegen</td><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> · oder Maus: Heli fliegt zum Zeiger</td></tr>
       <tr><td>Maschinengewehr</td><td><kbd>J</kbd> · linke Maustaste</td></tr>
       <tr><td>Bombe</td><td><kbd>I</kbd> / <kbd>V</kbd> · rechte Maustaste</td></tr>
-      <tr><td>Lenkrakete</td><td><kbd>B</kbd> / <kbd>K</kbd> / <kbd>Strg</kbd> links · mittlere Maustaste</td></tr>
+      <tr><td>Lenkrakete (nur Luftziele)</td><td><kbd>B</kbd> / <kbd>K</kbd> / <kbd>Strg</kbd> links · mittlere Maustaste</td></tr>
       <tr><td>Wenden</td><td><kbd>F</kbd> / <kbd>L</kbd> / <kbd>Shift</kbd> links · Mausrad (mit Maussteuerung automatisch)</td></tr>
       <tr><td>Absetzen / Absprung</td><td><kbd>Leertaste</kbd> · Maus-Seitentasten</td></tr>
       <tr><td>Einheiten kaufen</td><td><kbd>1</kbd>–<kbd>0</kbd> oder <kbd>T</kbd> <kbd>A</kbd> <kbd>M</kbd> <kbd>E</kbd> <kbd>D</kbd> <kbd>U</kbd> <kbd>P</kbd> <kbd>R</kbd> <kbd>G</kbd> <kbd>H</kbd> · Klick auf Kaufslot</td></tr>
       <tr><td>Pause / Vollbild</td><td><kbd>Esc</kbd> / <kbd>F11</kbd></td></tr>
       <tr><td>Heli-Sound an/aus</td><td><kbd>N</kbd></td></tr>
+      <tr><td>Mausfang</td><td>Im Vollbild bleibt der Mauszeiger im Spiel · <kbd>Esc</kbd> oder <kbd>Alt</kbd>+<kbd>Tab</kbd> gibt ihn frei (Spiel pausiert)</td></tr>
     </table>
     <p><b>Ziel:</b> Bring ein eigenes D-Team an das Zielgebäude (Kommandobunker) der roten Basis. Du verlierst, wenn ein feindliches D-Team deinen Bunker erreicht oder alle deine Hubschrauber verloren sind.</p>
-    <p>Lande auf deinem Landeplatz, um zu tanken, Munition, Bomben und Raketen aufzufüllen und zu reparieren. Jede nachgeladene Lenkrakete kostet 30 $. Treibstoff reicht für etwa zwei bis drei Minuten Flug.</p>
+    <p>Lande auf deinem Landeplatz, um zu tanken, Munition, Bomben und Raketen aufzufüllen und zu reparieren. Jede nachgeladene Lenkrakete kostet 30 $. Jeder gekaufte Ersatzhubschrauber macht den nächsten 100 $ teurer. Treibstoff reicht für etwa zwei bis drei Minuten Flug.</p>
     <p><b>Passagiere:</b> Landest du irgendwo außerhalb des Landeplatzes, steigen eigene Marines (bis 5) oder Engineers (bis 3) in der Nähe ein. Kaufst du einen Engineer, während du auf dem Landeplatz stehst, steigt er direkt ein. <kbd>Leertaste</kbd> setzt am Boden ab, in der Luft springt der Passagier am Fallschirm. Ein Engineer, der auf einem feindlichen Fahrzeug landet, kapert es.</p>
-    <p><b>Lenkraketen</b> weichst du aus, indem du kurz vor dem Einschlag scharf hoch- oder runterziehst. Nutze dafür lieber <kbd>B</kbd> oder <kbd>K</kbd>, denn Strg+T/W öffnet oder schließt Browser-Tabs.</p>
+    <p><b>Lenkraketen</b> des Helis erfassen nur Luftziele. Du weichst ihnen aus, indem du kurz vor dem Einschlag scharf hoch- oder runterziehst oder dich tief hinter Bodeneinheiten versteckst – die Rakete trifft dann die Einheit. Nutze dafür lieber <kbd>B</kbd> oder <kbd>K</kbd>, denn Strg+T/W öffnet oder schließt Browser-Tabs.</p>
     <p style="font-size:12px">Soundeffekte: CC0-Aufnahmen von Kenney.nl, Still North Media und artisticdude (OpenGameArt), für das Spiel geschnitten und abgemischt. Rotor, Wind, Regen und Warnton sind synthetisiert.</p>
     <div class="row"><button class="btn primary" id="btnHelpBack">Zurück</button></div>
   </div>
@@ -250,7 +251,7 @@ const BUY_LETTERS = ['t', 'a', 'm', 'e', 'd', 'u', 'p', 'r', 'g', 'h'];
 const Input = {
   down: new Set(), pressed: new Set(), buyQueue: [],
   mouse: { x: 0, y: 0, sx: 0, sy: 0, inside: false, buttons: 0, moved: 0, lastMoveT: 0, pressedBtns: new Set() },
-  wheel: 0, anyKeyT: 0, lastArrowT: -99,
+  wheel: 0, anyKeyT: 0, lastArrowT: -99, locked: false,
   gamepad: null,
   init(canvas) {
     const prevent = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Tab', 'ShiftLeft', 'ControlLeft', 'F11']);
@@ -272,18 +273,30 @@ const Input = {
     const m = this.mouse;
     const pos = e => { const r = canvas.getBoundingClientRect(); m.sx = (e.clientX - r.left); m.sy = (e.clientY - r.top); };
     canvas.addEventListener('mousemove', e => {
-      const ox = m.sx, oy = m.sy; pos(e);
+      const ox = m.sx, oy = m.sy;
+      if (this.locked) {   // Mausfang (Pointer Lock): virtueller Zeiger aus relativen Bewegungen
+        m.sx = clamp(m.sx + (e.movementX || 0), 0, canvas.clientWidth - 1);
+        m.sy = clamp(m.sy + (e.movementY || 0), 0, canvas.clientHeight - 1);
+      } else pos(e);
       m.moved += Math.abs(m.sx - ox) + Math.abs(m.sy - oy);
       m.lastMoveT = performance.now() / 1000; m.inside = true;
     });
     canvas.addEventListener('mouseenter', () => { m.inside = true; });
     canvas.addEventListener('mouseleave', () => { m.inside = false; });
     canvas.addEventListener('mousedown', e => {
-      pos(e); m.buttons |= (1 << e.button); m.pressedBtns.add(e.button);
+      if (!this.locked) pos(e);
+      m.buttons |= (1 << e.button); m.pressedBtns.add(e.button);
       if (e.button >= 1) e.preventDefault();
       canvas.focus(); Audio2.unlock();
+      if (!this.locked && UI.wantLock()) UI.lockMouse();
     });
     window.addEventListener('mouseup', e => { m.buttons &= ~(1 << e.button); if (e.button >= 3) e.preventDefault(); });
+    document.addEventListener('pointerlockchange', () => {
+      const was = this.locked;
+      this.locked = document.pointerLockElement === canvas;
+      if (this.locked) { m.inside = true; if (m.sx <= 0 && m.sy <= 0) { m.sx = canvas.clientWidth / 2; m.sy = canvas.clientHeight / 2; } }
+      else if (was) UI.onUnlock();
+    });
     canvas.addEventListener('auxclick', e => e.preventDefault());
     canvas.addEventListener('contextmenu', e => e.preventDefault());
     canvas.addEventListener('wheel', e => { this.wheel += Math.sign(e.deltaY); e.preventDefault(); }, { passive: false });
@@ -1713,6 +1726,7 @@ const DIFFS = [
   { id: 'veteran', name: 'Veteran', pInc: 9.0, aiInc: 12.5, aiDmg: 1.35, aiHelis: 2, aiRespawn: 22, lives: 3, dteam: [70, 95] },
 ];
 const BOUNTY = { tank: 25, dteam: 60, aa: 30, patriot: 120, ultra: 150, goliath: 150, marine: 5, eng: 15, heli: 100, fuel: 60, bunker: 40, tower: 40, nest: 30, baseflak: 150 };
+const HELI_PRICE_STEP = 100; // jeder weitere Ersatzhubschrauber kostet 100 $ mehr
 const MISSILE_COST = 30; // Preis je nachgeladener Heli-Lenkrakete
 const START_MONEY = 260, SUPPLY_MAX = 30, QUEUE_MAX = 5, SPAWN_INTERVAL = 1.2;
 const HELI_VX = 250, HELI_VY = 170;
@@ -2267,6 +2281,9 @@ class Patriot extends Unit {
   onDeath() { FX.explosion(this.x, this.y - 10, 1.4); World.crater(this.x, 16); Game.addWreck(SPR['patriot' + this.team + 'Wreck'], this.x, this.y - 7, this.dir < 0); }
 }
 
+// Bombenschaden für schwere Ziele: Volltreffer (120) = 10 % der max. HP, Druckwelle anteilig
+function bombPct(u, amount) { return u.maxHp * 0.1 * amount / 120; }
+
 // ---------- Ultra (Höllenbestie mit Reiter) ----------
 class Ultra extends Unit {
   constructor(team, x) {
@@ -2276,7 +2293,7 @@ class Ultra extends Unit {
   }
   get cy() { return this.y - 34; }
   damage(amount, src, kind) {
-    if (kind === 'bomb' || kind === 'bombsplash') amount *= 0.1; // gegen Bomben fast immun
+    if (kind === 'bomb' || kind === 'bombsplash') amount = bombPct(this, amount); // Bombe: 10 % der max. HP
     super.damage(amount, src, kind);
   }
   think(dt) {
@@ -2419,6 +2436,10 @@ class Goliath extends Unit {
     this.swing = 1; this.swingT = 0; this.swingFrom = this.feet[1].x; this.bob = 0;
   }
   get cy() { return this.y - 138; }
+  damage(amount, src, kind) {
+    if (kind === 'bomb' || kind === 'bombsplash') amount = bombPct(this, amount); // Bombe: 10 % der max. HP
+    super.damage(amount, src, kind);
+  }
   get topY() { return this.y - 198; }
   think(dt) {
     const d = this.dir;
@@ -2634,7 +2655,7 @@ class BaseFlak extends Building {
     if (air && this.cdAir <= 0) {
       this.cdAir = 1.15; this.recoil = 3;
       const d = dist(px, py, tx, ty);
-      Projectiles.flak(this.team, mx, my, Math.cos(this.ang) * 430, Math.sin(this.ang) * 430, d / 430 + rand(-0.06, 0.06), 16 * mul, this);
+      Projectiles.flak(this.team, mx, my, Math.cos(this.ang) * 430, Math.sin(this.ang) * 430, d / 430 + rand(-0.06, 0.06), 8 * mul, this);   // Flak-Schaden gegen Helis halbiert
       FX.flash(mx, my, 10); Audio2.play('flak', px); Game.addLight(mx, my, 50, [255, 210, 150], 1, 0.1);
     } else if (gnd && this.cdGnd <= 0) {
       this.cdGnd = 2.2; this.recoil = 4;
@@ -2916,7 +2937,7 @@ class FlakNest extends Building {
       if (this.burstT <= 0) {
         this.burst--; this.burstT = 0.07;
         const a = this.ang + rand(-0.03, 0.03), mx = px + Math.cos(a) * 10, my = py + Math.sin(a) * 10;
-        Projectiles.bullet(this.team, mx, my, Math.cos(a) * 800, Math.sin(a) * 800, 4.5 * Game.dmgMul(this.team), this, { life: 0.55, ground: false, col: '#ffd070', grav: 0 });
+        Projectiles.bullet(this.team, mx, my, Math.cos(a) * 800, Math.sin(a) * 800, 2.25 * Game.dmgMul(this.team), this, { life: 0.55, ground: false, col: '#ffd070', grav: 0 });
         FX.flash(mx, my, 5); Audio2.play('mg', this.x, 0.6);
       }
     } else if (this.cd <= 0 && Math.abs(angNorm(want - this.ang)) < 0.15) { this.burst = 5; this.cd = 1.3; }
@@ -3251,8 +3272,12 @@ const Missiles = {
     for (const a of Game.aircraft) { if (a.dead || a.team === p.team) continue; if (Math.abs(a.x - p.x) < a.w / 2 && Math.abs(a.y - p.y) < a.h / 2) return a; }
     return Game.hitTest(p.team, p.x, p.y, { air: false, ground: true, buildings: true, radius: 1 });
   },
-  // Raketenschaden in Anteilen der maximalen HP: Heli 70 %, Panzer 80 %, alle anderen Einheiten 30 %
-  pct(t) { return t.isHeli ? 0.7 : t.type === 'tank' ? 0.8 : 0.3; },
+  // Raketenschaden in Anteilen der maximalen HP. Bodeneinheiten werden nur noch getroffen,
+  // wenn ein Heli sich hinter ihnen in Sicherheit bringt: Panzer 40 %, Ultra/Goliath/Patriot 10 %, übrige 30 %
+  pct(t) {
+    if (t.isHeli) return 0.7;
+    switch (t.type) { case 'tank': return 0.4; case 'ultra': case 'goliath': case 'patriot': return 0.1; default: return 0.3; }
+  },
   detonate(p, hit) {
     const mul = Game.dmgMul(p.team), src = p.src;
     if (hit) {
@@ -3277,11 +3302,10 @@ const Missiles = {
     FX.explosion(p.x, p.y, 1);
     if (p.y > GROUND - 8) World.crater(p.x, 14);
   },
-  // Zielerfassung für Hubschrauber-Raketen
+  // Zielerfassung für Hubschrauber-Raketen: nur Luftziele (Helis, Tankflugzeuge)
   acquire(h, kind) {
     const range = (BASE_X[1] - BASE_X[0]) / 2;
-    const alt = h.alt, preferGround = alt < 90 && kind === 'player';
-    let air = null, ad = 1e9, gnd = null, gd = 1e9;
+    let air = null, ad = 1e9;
     for (const e of Game.helis) {
       if (!e.targetableBy(h.team) || Game.padSafe(e)) continue;
       if (Math.abs(e.y - h.y) > 60) continue;
@@ -3295,25 +3319,7 @@ const Missiles = {
       const front = (a.x - h.x) * h.facing > 0 ? 0 : 1500;
       if (d + front < ad) { ad = d + front; air = a; }
     }
-    if (kind === 'player') {
-      const prio = { dteam: 0, patriot: 50, aa: 80, tank: 100, ultra: 120, goliath: 130 };
-      for (const u of Game.units) {
-        if (!u.targetableBy(h.team) || u.airborne || !(u.type in prio)) continue;
-        const d = Math.abs(u.x - h.x); if (d > range) continue;
-        const front = (u.x - h.x) * h.facing > 0 ? 0 : 1500;
-        const score = d + front + prio[u.type];
-        if (score < gd) { gd = score; gnd = u; }
-      }
-      for (const b of Game.buildings) {
-        if (!b.targetableBy(h.team) || b.kind === 'bunker') continue;
-        const d = Math.abs(b.x - h.x); if (d > range) continue;
-        const front = (b.x - h.x) * h.facing > 0 ? 0 : 1500;
-        const score = d + front + 200;
-        if (score < gd) { gd = score; gnd = b; }
-      }
-    }
-    if (preferGround) return gnd || air;
-    return air || gnd;
+    return air;
   },
   draw(ctx, p) {
     ctx.save(); ctx.translate(Math.round(p.x), Math.round(p.y)); ctx.rotate(p.ang);
@@ -3522,7 +3528,7 @@ class Heli {
     if (this.missiles <= 0) { if (this.isPlayer) Game.msgTo(this.team, 'Keine Lenkraketen – auf dem Landeplatz nachladen', 'warn', 'deny'); this.missileCd = 0.5; return; }
     const kind = this.isPlayer ? 'player' : 'aiheli';
     const t = Missiles.acquire(this, kind);
-    if (!t) { if (this.isPlayer) Game.msgTo(this.team, 'Kein Ziel', 'warn', 'deny'); this.missileCd = 0.5; return; }
+    if (!t) { if (this.isPlayer) Game.msgTo(this.team, 'Kein Luftziel', 'warn', 'deny'); this.missileCd = 0.5; return; }
     this.missiles--; this.missileCd = 0.8;
     const ang = (this.facing > 0 ? 0 : PI) + this.tilt * 0.5;
     Missiles.launch(this.team, this.x + this.facing * 6, this.y + 9, ang, Math.abs(this.vx) + 160, kind, t, this);
@@ -3659,7 +3665,7 @@ const Game = {
     this.teams = [0, 1].map(t => ({
       money: START_MONEY, shown: START_MONEY, queue: [], spawnT: 0,
       baseIncome: t === 0 ? d.pInc : d.aiInc,
-      built: 0, lost: 0, groundKills: 0, helisDown: 0, reserve: 0, bounty: 0, kills: 0, respawnT: -1, graceT: -1,
+      helisBought: 0, built: 0, lost: 0, groundKills: 0, helisDown: 0, reserve: 0, bounty: 0, kills: 0, respawnT: -1, graceT: -1,
     }));
     this.cmd = [new CmdBunker(0), new CmdBunker(1)];
     this.flak = [new BaseFlak(0), new BaseFlak(1)];
@@ -3725,12 +3731,15 @@ const Game = {
     return s;
   },
   // ---------- Kaufen ----------
+  // Aktueller Preis (Ersatzhubschrauber werden mit jedem Kauf 100 $ teurer)
+  cost(team, def) { return def.id === 'heli' ? def.cost + HELI_PRICE_STEP * (this.teams[team].helisBought || 0) : def.cost; },
   buy(team, idx, silent) {
     const def = SHOP[idx]; if (!def) return false;
     const T = this.teams[team];
     const fail = (m) => { if (!silent) this.msgTo(team, m, 'bad', 'deny'); return false; };
     if (!AVAILABLE.has(def.id)) return fail(def.name + ' folgt in Stufe 2');
-    if (T.money < def.cost) return fail('Nicht genug Geld für ' + def.name);
+    const price = this.cost(team, def);
+    if (T.money < price) return fail('Nicht genug Geld für ' + def.name + ' (' + price + ' $)');
     if (def.sup > 0 && this.supplyUsed(team) + def.sup > SUPPLY_MAX) return fail('Supply-Limit erreicht');
     if (def.id === 'fuel') {
       if (this.aircraft.some(a => a.type === 'fuel' && a.team === team && !a.dead)) return fail('Es ist bereits ein Tankflugzeug unterwegs');
@@ -3749,7 +3758,7 @@ const Game = {
     }
     if (def.id === 'heli') {
       if (T.reserve >= 9) return fail('Maximal 9 Ersatzhubschrauber');
-      T.money -= def.cost; T.reserve++;
+      T.money -= price; T.reserve++; T.helisBought = (T.helisBought || 0) + 1;
       if (this.humanTeams.includes(team)) {
         if (T.graceT > 0) { T.graceT = -1; T.reserve--; T.respawnT = 1; this.msgTo(team, 'Ersatzhubschrauber startet!', 'good', 'ui'); }
         else this.msgTo(team, 'Ersatzhubschrauber bereit (+1 Reserve)', 'good', 'ui');
@@ -4226,9 +4235,9 @@ class Commander {
     const id = this.plan[0], def = SHOP[shopIdx(id)];
     // Geld für das nächste D-Team zurückhalten
     const reserve = this.dteamT < 15 ? 250 : 0;
-    if (T.money - def.cost < reserve) return;
+    if (T.money - Game.cost(this.team, def) < reserve) return;
     if (Game.buy(this.team, shopIdx(id), true)) this.plan.shift();
-    else if (T.money >= def.cost) this.plan.shift(); // Supply/Warteschlange voll -> verwerfen
+    else if (T.money >= Game.cost(this.team, def)) this.plan.shift(); // Supply/Warteschlange voll -> verwerfen
   }
 }
 
@@ -4255,7 +4264,7 @@ class HeliAI {
       let pr;
       if (u.type === 'dteam') pr = 0; // D-Teams haben Vorrang
       else if (u.type === 'tank' || u.type === 'patriot' || u.type === 'aa') pr = 600;
-      else if (u.type === 'goliath' || u.type === 'ultra') pr = 900;
+      else if (u.type === 'goliath' || u.type === 'ultra') pr = 1400; // Bomben wirken kaum (10 %) – nur wenn nichts anderes da ist
       else continue;
       if (u.type !== 'dteam' && Math.abs(u.x - front) > 500) continue;
       const fx = this.flakSafeX(u.x); if (Math.abs(fx - u.x) > 1) continue;
@@ -4581,10 +4590,10 @@ const HUD = {
     const on = G.mouseSteer && G.mouseMode && m.inside && G.state === 'play' && HUD.hover < 0;
     const c = Render.canvas;
     if (on !== this._retOn) { c.classList.toggle('nocursor', on); this._retOn = on; }
-    if (!on) return;
     const p = Render.screenToHud(m.sx, m.sy);
+    if (!on) { if (Input.locked) this.drawPointer(ctx, p.x, p.y); return; }
     const hot = HUD.overPanel(p.x, p.y);
-    if (hot) { c.classList.toggle('nocursor', false); this._retOn = false; return; }
+    if (hot) { c.classList.toggle('nocursor', false); this._retOn = false; if (Input.locked) this.drawPointer(ctx, p.x, p.y); return; }
     const r = 16 + (Input.btn(0) ? -3 : 0);
     ctx.strokeStyle = 'rgba(243,180,58,0.9)'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, TAU); ctx.stroke();
@@ -4593,6 +4602,14 @@ const HUD = {
     ctx.moveTo(p.x, p.y - r - 8); ctx.lineTo(p.x, p.y - r + 5); ctx.moveTo(p.x, p.y + r - 5); ctx.lineTo(p.x, p.y + r + 8);
     ctx.stroke();
     ctx.fillStyle = 'rgba(243,180,58,0.9)'; ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3);
+  },
+  // Eigener Mauspfeil, solange der Browser-Zeiger gefangen (unsichtbar) ist
+  drawPointer(ctx, x, y) {
+    const s = 1.6;
+    ctx.save(); ctx.translate(Math.round(x), Math.round(y)); ctx.scale(s, s);
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, 17); ctx.lineTo(4.5, 13); ctx.lineTo(7.5, 20); ctx.lineTo(10.5, 18.8); ctx.lineTo(7.5, 12); ctx.lineTo(13, 12); ctx.closePath();
+    ctx.fillStyle = '#f1f4f8'; ctx.fill(); ctx.lineWidth = 1.4; ctx.strokeStyle = '#0a0d12'; ctx.stroke();
+    ctx.restore();
   },
   // ---------- Status (oben links) ----------
   drawStatus(ctx) {
@@ -4674,7 +4691,8 @@ const HUD = {
       const sx = sx0 + col * (sw + gap), sy = sy0 + row * (sh + gap);
       this.slots.push({ x: sx, y: sy, w: sw, h: sh, i });
       const av = AVAILABLE.has(d.id);
-      const afford = money >= d.cost, supOk = d.sup === 0 || sup + d.sup <= SUPPLY_MAX;
+      const price = G.cost(G.playerTeam, d);
+      const afford = money >= price, supOk = d.sup === 0 || sup + d.sup <= SUPPLY_MAX;
       const ok = av && afford && supOk;
       ctx.fillStyle = this.hover === i ? 'rgba(60,80,110,0.7)' : 'rgba(255,255,255,0.05)';
       ctx.fillRect(sx, sy, sw, sh);
@@ -4684,7 +4702,7 @@ const HUD = {
       this.text(ctx, d.key + ' · ' + d.letter, sx + 7, sy + 19, 14, C.amber, 'left', 700);
       if (d.sup) this.text(ctx, 'S' + d.sup, sx + sw - 7, sy + 19, 14, C.muted, 'right', 700);
       this.text(ctx, d.name.toUpperCase(), sx + sw / 2, sy + 66, 14, C.text, 'center', 700);
-      this.text(ctx, d.cost + ' $', sx + sw / 2, sy + 82, 14, afford ? C.amber : C.red, 'center', 600);
+      this.text(ctx, price + ' $', sx + sw / 2, sy + 82, 14, afford ? C.amber : C.red, 'center', 600);
       ctx.globalAlpha = 1;
       if (!av) { ctx.fillStyle = 'rgba(10,14,20,0.55)'; ctx.fillRect(sx, sy + 24, sw, 30); this.text(ctx, 'STUFE 2', sx + sw / 2, sy + 44, 13, C.muted, 'center', 700); }
       // Cooldown-Balken: Einheit in Produktion
@@ -4873,7 +4891,10 @@ const UI = {
     $('duelCode').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') this.joinDuel(); });
     $('btnDuelStart').onclick = () => { clearInterval(this.duelPoll); Net.startHost(); this.hideAll(); };
     $('lnkLocal').onclick = e => { e.preventDefault(); this.duelKind = this.duelKind === 'local' ? 'auto' : 'local'; this.openDuel(); };
-    document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && Game.state === 'play' && Game.mode === 'play') this.pause(); });
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement) { if (Game.state === 'play' && Game.mode === 'play') this.pause(); }
+      else if (this.wantLock()) this.lockMouse();
+    });
   },
   toggleRotor() { Audio2.rotorOn = !Audio2.rotorOn; this.save(); this.sync(); Audio2.play('ui'); if (Game.live) Game.msg('Heli-Sound ' + (Audio2.rotorOn ? 'an' : 'aus') + ' (Taste N)', 'info'); },
   save() { try { localStorage.setItem('rotorfront.settings', JSON.stringify({ diff: Game.diffIdx, mouse: Game.mouseSteer, sound: Audio2.enabled, rotor: Audio2.rotorOn })); } catch (e) { } },
@@ -4883,12 +4904,29 @@ const UI = {
     this.el('valSound').textContent = this.el('valPSound').textContent = Audio2.enabled ? 'An' : 'Aus';
     this.el('valRotor').textContent = this.el('valPRotor').textContent = Audio2.rotorOn ? 'An' : 'Aus';
   },
+  // ---------- Mausfang im Vollbild (Pointer Lock) ----------
+  menuOpen() { return ['mainMenu', 'pauseMenu', 'helpMenu', 'resultMenu', 'duelMenu'].some(m => !this.el(m).hidden); },
+  wantLock() { return !!document.fullscreenElement && Game.live && Game.state === 'play' && !this.menuOpen(); },
+  lockMouse() {
+    const c = this.el('game');
+    if (!c.requestPointerLock || document.pointerLockElement === c) return;
+    try { const p = c.requestPointerLock(); if (p && p.catch) p.catch(() => { }); } catch (e) { }
+  },
+  unlockMouse() { if (document.pointerLockElement) { this.intentUnlock = true; try { document.exitPointerLock(); } catch (e) { } } },
+  onUnlock() {
+    // Freigabe durch Esc oder Alt+Tab: Pause-Menü zeigen, damit der Zeiger frei ist
+    if (this.intentUnlock) { this.intentUnlock = false; return; }
+    if (this.menuOpen()) return;
+    if (Game.mode === 'play' && Game.state === 'play') this.pause();
+    else if (Game.mode === 'duel' && Game.state === 'play') { this.toggleDuelMenu(); }
+  },
   show(id) {
+    if (id) this.unlockMouse();
     for (const m of ['mainMenu', 'pauseMenu', 'helpMenu', 'resultMenu', 'duelMenu']) this.el(m).hidden = m !== id;
     const c = this.el('game');
     c.classList.toggle('nocursor', false);
   },
-  hideAll() { this.show(null); this.el('game').focus(); },
+  hideAll() { this.show(null); this.el('game').focus(); if (this.wantLock()) this.lockMouse(); },
   toMain() { this.el('btnRestart').hidden = false; Game.playerTeam = 0; Game.reset('demo'); this.show('mainMenu'); },
   startGame() { Net.close(); this.el('btnRestart').hidden = false; Game.playerTeam = 0; Game.reset('play'); this.hideAll(); },
   duelKind: 'auto',
@@ -4931,9 +4969,9 @@ const UI = {
   },
   toggleDuelMenu() {
     const pm = this.el('pauseMenu');
-    if (pm.hidden) { this.el('btnRestart').hidden = true; this.show('pauseMenu'); } else this.hideAll();
+    if (pm.hidden) { this.el('btnRestart').hidden = true; this.pausedAt = performance.now(); this.show('pauseMenu'); } else this.hideAll();
   },
-  pause() { if (Game.state !== 'play') return; Game.state = 'paused'; this.show('pauseMenu'); },
+  pause() { if (Game.state !== 'play') return; Game.state = 'paused'; this.pausedAt = performance.now(); this.show('pauseMenu'); },
   resume() { if (Game.mode === 'duel') { this.hideAll(); return; } if (Game.state !== 'paused') return; Game.state = 'play'; this.hideAll(); },
   toggleFull() {
     try {
@@ -5024,6 +5062,8 @@ const Main = {
     self.fpsAcc += frameDt; self.fpsN++; if (self.fpsAcc > 0.5) { self.fps = self.fpsN / self.fpsAcc; self.fpsAcc = 0; self.fpsN = 0; }
     Input.pollGamepad();
     const act = self.buildActions();
+    // Esc, der gerade eben schon den Mausfang gelöst und pausiert hat, nicht gleich wieder als "Fortsetzen" werten
+    if (act.pause && performance.now() - (UI.pausedAt || 0) < 350) act.pause = false;
     if (act.pause) { if (Game.mode === 'duel') UI.toggleDuelMenu(); else if (Game.state === 'play' && Game.mode === 'play') UI.pause(); else if (Game.state === 'paused') UI.resume(); }
     self.acc += frameDt;
     let steps = 0;
@@ -5216,7 +5256,7 @@ const Net = {
     const r1 = n => Math.round(n);
     S.q = ++this.sq; S.a = this.remote.s;
     S.T = [r1(G.time * 10), r1(Weather.rain * 100), r1(Weather.flash * 100), G.state === 'result' ? 1 : 0, G.winner + 1, ['', 'dteam', 'helis', 'left'].indexOf(G.reasonCode), r1(Weather.target * 100), r1(G.bigFlash * 100 || 0)];
-    S.m = G.teams.map((T, t) => [r1(T.money), T.reserve, r1(T.respawnT * 10), r1(T.graceT * 10), T.queue.map(q => SHOP.findIndex(d => d.id === q)).join(''), r1(Math.max(0, T.spawnT) * 100), T.kills, T.bounty, T.built, T.lost, T.groundKills, T.helisDown, G.supplyUsed(t), r1(G.income(t) * 10)]);
+    S.m = G.teams.map((T, t) => [r1(T.money), T.reserve, r1(T.respawnT * 10), r1(T.graceT * 10), T.queue.map(q => SHOP.findIndex(d => d.id === q)).join(''), r1(Math.max(0, T.spawnT) * 100), T.kills, T.bounty, T.built, T.lost, T.groundKills, T.helisDown, G.supplyUsed(t), r1(G.income(t) * 10), T.helisBought || 0]);
     S.h = G.helis.filter(h => h.state !== 'dead' || h.isPlayer).map(h => [h.id, h.team, r1(h.x * 10), r1(h.y * 10), r1(h.vx), r1(h.vy), h.facing, r1(h.turnT * 1000), h.turnFrom || h.facing, r1(h.tilt * 1000), r1(h.hp * 10), r1(h.fuel * 10), r1(h.ammo), h.bombs, h.missiles,
       h.paxKind === 'eng' ? 1 : h.paxKind === 'marine' ? 2 : 0, h.passengers.length, h.state === 'fly' ? 0 : h.state === 'crash' ? 1 : 2, r1(Math.max(0, h.invuln) * 10), h.landed ? 1 : 0, h.flashT > 0 ? 1 : 0, r1(h.crashRot * 100), h.isPlayer ? 1 : 0, h.maxBombs, h.maxMissiles]);
     S.A = G.aircraft.map(a => [a.id, a.team, r1(a.x), r1(a.y), a.facing, ['toHeli', 'dock', 'return', 'reload', 'leave'].indexOf(a.state), r1(a.hp / a.maxHp * 100), r1(a.pitch * 100), a.crashing ? 1 : 0, r1(a.vx), r1(a.vy)]);
@@ -5380,7 +5420,7 @@ const Net = {
     S.m.forEach((m, t) => {
       const X = G.teams[t];
       X.money = m[0]; X.reserve = m[1]; X.respawnT = m[2] / 10; X.graceT = m[3] / 10; X.queue = String(m[4]).split('').filter(c => c !== '').map(c => SHOP[+c].id); X.spawnT = m[5] / 100;
-      X.kills = m[6]; X.bounty = m[7]; X.built = m[8]; X.lost = m[9]; X.groundKills = m[10]; X.helisDown = m[11]; this.sup[t] = m[12]; X.incomeNet = m[13] / 10;
+      X.kills = m[6]; X.bounty = m[7]; X.built = m[8]; X.lost = m[9]; X.groundKills = m[10]; X.helisDown = m[11]; this.sup[t] = m[12]; X.incomeNet = m[13] / 10; X.helisBought = m[14] || 0;
     });
     this.applyHelis(S);
     // Einheiten
