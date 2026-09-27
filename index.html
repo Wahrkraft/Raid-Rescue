@@ -73,6 +73,8 @@ body{font-family:var(--f-ui);color:var(--text);-webkit-user-select:none;user-sel
 .duel .status.err{color:var(--red);}
 .duel .fine{font-size:13px;}
 .duel a{color:var(--amber);}
+@media (max-height:820px){.title-block{top:4vh}.title{font-size:clamp(36px,min(9vw,12vh),124px)}.subtitle{margin-top:8px}.menu-wrap{bottom:6vh}.menu{gap:6px}.menu .btn{padding:8px 16px;font-size:15px}}
+@media (max-height:560px){.subtitle{display:none}.menu .btn{padding:6px 14px;font-size:14px}.menu{gap:4px}}
 .hint{position:fixed;bottom:12px;left:0;right:0;text-align:center;color:var(--muted);font-size:13px;letter-spacing:.06em;pointer-events:none;}
 #loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--f-ui);letter-spacing:.3em;color:var(--muted);background:#05080d;}
 @media (prefers-reduced-motion: reduce){.btn{transition:none}}
@@ -92,6 +94,7 @@ body{font-family:var(--f-ui);color:var(--text);-webkit-user-select:none;user-sel
       <button class="btn" id="btnDiff">Schwierigkeit <span class="val" id="valDiff">Soldat</span></button>
       <button class="btn" id="btnMouse">Maussteuerung <span class="val" id="valMouse">An</span></button>
       <button class="btn" id="btnSound">Ton <span class="val" id="valSound">An</span></button>
+      <button class="btn" id="btnRotor">Heli-Sound <span class="val" id="valRotor">An</span></button>
       <button class="btn" id="btnFull">Vollbild <span class="val">F11</span></button>
       <button class="btn" id="btnHelp">Steuerung &amp; Regeln <span>?</span></button>
     </div>
@@ -105,6 +108,7 @@ body{font-family:var(--f-ui);color:var(--text);-webkit-user-select:none;user-sel
     <button class="btn primary" id="btnResume">Fortsetzen <span>Esc</span></button>
     <button class="btn" id="btnPMouse">Maussteuerung <span class="val" id="valPMouse">An</span></button>
     <button class="btn" id="btnPSound">Ton <span class="val" id="valPSound">An</span></button>
+    <button class="btn" id="btnPRotor">Heli-Sound <span class="val" id="valPRotor">An</span></button>
     <button class="btn" id="btnPHelp">Steuerung &amp; Regeln <span>?</span></button>
     <button class="btn" id="btnRestart">Neu starten <span>↻</span></button>
     <button class="btn" id="btnMain">Hauptmenü <span>⌂</span></button>
@@ -123,6 +127,7 @@ body{font-family:var(--f-ui);color:var(--text);-webkit-user-select:none;user-sel
       <tr><td>Absetzen / Absprung</td><td><kbd>Leertaste</kbd> · Maus-Seitentasten</td></tr>
       <tr><td>Einheiten kaufen</td><td><kbd>1</kbd>–<kbd>0</kbd> oder <kbd>T</kbd> <kbd>A</kbd> <kbd>M</kbd> <kbd>E</kbd> <kbd>D</kbd> <kbd>U</kbd> <kbd>P</kbd> <kbd>R</kbd> <kbd>G</kbd> <kbd>H</kbd> · Klick auf Kaufslot</td></tr>
       <tr><td>Pause / Vollbild</td><td><kbd>Esc</kbd> / <kbd>F11</kbd></td></tr>
+      <tr><td>Heli-Sound an/aus</td><td><kbd>N</kbd></td></tr>
     </table>
     <p><b>Ziel:</b> Bring ein eigenes D-Team an das Zielgebäude (Kommandobunker) der roten Basis. Du verlierst, wenn ein feindliches D-Team deinen Bunker erreicht oder alle deine Hubschrauber verloren sind.</p>
     <p>Lande auf deinem Landeplatz, um zu tanken, Munition, Bomben und Raketen aufzufüllen und zu reparieren. Jede nachgeladene Lenkrakete kostet 30 $. Treibstoff reicht für etwa zwei bis drei Minuten Flug.</p>
@@ -489,7 +494,7 @@ const SoundLib = {
 };
 
 const Audio2 = {
-  ctx: null, master: null, enabled: true, lib: null, bufs: {}, last: {}, listenerX: 480, loops: {}, voices: 0,
+  ctx: null, master: null, enabled: true, rotorOn: true, rotorVol: 0.3, lib: null, bufs: {}, last: {}, listenerX: 480, loops: {}, voices: 0,
   unlock() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
@@ -634,7 +639,9 @@ const Audio2 = {
   setLoop(name, vol, x, rateMul = 1) {
     if (!this.ctx || !this.loops[name]) return;
     const L = this.loops[name], t = this.ctx.currentTime, s = this.spatial(x);
-    L.g.gain.setTargetAtTime(this.enabled ? vol * 1.6 * (x === null ? 1 : s.gain) : 0, t, 0.08);
+    // Heli-Rotoren: 30 % Lautstärke, separat abschaltbar
+    const rk = (name === 'player' || name === 'enemy') ? (this.rotorOn ? this.rotorVol : 0) : 1;
+    L.g.gain.setTargetAtTime(this.enabled ? vol * 1.6 * rk * (x === null ? 1 : s.gain) : 0, t, 0.08);
     if (L.pan) L.pan.pan.setTargetAtTime(x === null ? 0 : s.pan, t, 0.1);
     L.lp.frequency.setTargetAtTime(x === null ? 18000 : s.cut, t, 0.1);
     L.src.playbackRate.setTargetAtTime((name === 'enemy' ? 0.92 : 1) * rateMul, t, 0.2);
@@ -3153,10 +3160,11 @@ const Projectiles = {
 //  · nach Vorbeiflug beim Wenden 40 % Zielverlust
 //  · 20 s Treibstoff, danach antriebslos, Detonation bei Bodenkontakt
 // ============================================================
+const MISSILE_SPEED_MUL = 0.8; // Raketen fliegen mit 80 % des bisherigen Tempos
 const MISSILE = { fuel: 20, lead: 0.15, turn: 1.04, fastTurn: 4.8, brake: 1500, accel: 750, blind: 150, lostChance: 0.25, offAngle: 80 * PI / 180, fuseX: 22, fuseY: 11 };
 const Missiles = {
   ready: true,
-  maxSpeed(kind) { return kind === 'player' ? 666 : kind === 'aiheli' ? HELI_VX * 1.62 : 540; },
+  maxSpeed(kind) { return MISSILE_SPEED_MUL * (kind === 'player' ? 666 : kind === 'aiheli' ? HELI_VX * 1.62 : 540); },
   launch(team, x, y, ang, v0, kind, target, src) {
     const vmax = this.maxSpeed(kind);
     const p = { id: UID++, t: 'missile', team, x, y, px: x, py: y, ang, v: kind === 'aiheli' ? vmax : Math.min(vmax, v0), vmax, kind, target, src, fuel: MISSILE.fuel, life: 40,
@@ -3243,19 +3251,29 @@ const Missiles = {
     for (const a of Game.aircraft) { if (a.dead || a.team === p.team) continue; if (Math.abs(a.x - p.x) < a.w / 2 && Math.abs(a.y - p.y) < a.h / 2) return a; }
     return Game.hitTest(p.team, p.x, p.y, { air: false, ground: true, buildings: true, radius: 1 });
   },
+  // Raketenschaden in Anteilen der maximalen HP: Heli 70 %, Panzer 80 %, alle anderen Einheiten 30 %
+  pct(t) { return t.isHeli ? 0.7 : t.type === 'tank' ? 0.8 : 0.3; },
   detonate(p, hit) {
     const mul = Game.dmgMul(p.team), src = p.src;
     if (hit) {
-      if (hit.isHeli) {
-        if (p.kind === 'player') hit.damage(hit.hp + 999, src, 'missile');
-        else hit.damage(70 * mul, src, 'missile');
-      } else if (['tank', 'aa', 'patriot', 'dteam'].includes(hit.type) || hit.kind === 'nest') {
-        hit.damage((hit.hp || 0) + 99999, src, 'missile');
-      } else if (hit.type === 'ultra') hit.damage(240 * mul, src, 'missile');
-      else if (hit.type === 'marine' || hit.type === 'eng' || hit.kind === 'bunker') { /* nur Flächenschaden */ }
-      else hit.damage(120 * mul, src, 'missile');
+      if (hit.isHeli || hit instanceof Unit) hit.damage(hit.maxHp * this.pct(hit) * mul, src, 'missile');
+      else if (hit.kind === 'nest') hit.damage((hit.hp || 0) + 99999, src, 'missile');
+      else if (hit.kind === 'bunker') { /* nur Flächenschaden */ }
+      else hit.damage(120 * mul, src, 'missile');   // Gebäude, Tankflugzeug …
     }
-    Game.splash(p.team, p.x, p.y, 42, 60 * mul, src, 'missile', hit, { air: true });
+    // Druckwelle: Nebenziele erhalten die Hälfte des Anteils (mit Abfall zum Rand), Gebäude wie bisher
+    const r = 42, fall = d => 0.5 * (1 - clamp(d / r, 0, 1) * 0.5);
+    for (const u of Game.units) {
+      if (u === hit || u.dead || u.inside || !u.targetableBy(p.team)) continue;
+      const dx = Math.max(0, Math.abs(u.x - p.x) - u.w / 2), dy = Math.max(0, Math.abs(u.cy - p.y) - u.h / 2), d = Math.hypot(dx, dy);
+      if (d < r) u.damage(u.maxHp * this.pct(u) * fall(d) * mul, src, 'missile');
+    }
+    for (const h of Game.helis) {
+      if (h === hit || h.state !== 'fly' || h.team === p.team) continue;
+      const d = dist(h.x, h.y, p.x, p.y);
+      if (d < r) h.damage(h.maxHp * this.pct(h) * fall(d) * mul, src, 'missile');
+    }
+    Game.splash(p.team, p.x, p.y, r, 60 * mul, src, 'missile', hit, { air: false, unitsOff: true });
     FX.explosion(p.x, p.y, 1);
     if (p.y > GROUND - 8) World.crater(p.x, 14);
   },
@@ -3941,7 +3959,7 @@ const Game = {
     const hitAll = o.friendly;
     const f = d => dmg * (1 - clamp(d / r, 0, 1) * 0.5);
     if (o.ground !== false) {
-      for (const u of this.units) {
+      if (!o.unitsOff) for (const u of this.units) {
         if (u === exclude || u.dead || u.inside) continue;
         if (!hitAll && !u.targetableBy(team)) continue;
         const dx = Math.max(0, Math.abs(u.x - x) - u.w / 2), dy = Math.max(0, Math.abs(u.cy - y) - u.h / 2), d = Math.hypot(dx, dy);
@@ -4833,13 +4851,14 @@ const UI = {
   helpReturn: 'main',
   init() {
     const $ = this.el;
-    try { const s = JSON.parse(localStorage.getItem('rotorfront.settings') || '{}'); if (s.diff !== undefined) Game.diffIdx = clamp(s.diff, 0, 2); if (s.mouse !== undefined) Game.mouseSteer = !!s.mouse; if (s.sound !== undefined) Audio2.enabled = !!s.sound; } catch (e) { }
+    try { const s = JSON.parse(localStorage.getItem('rotorfront.settings') || '{}'); if (s.diff !== undefined) Game.diffIdx = clamp(s.diff, 0, 2); if (s.mouse !== undefined) Game.mouseSteer = !!s.mouse; if (s.sound !== undefined) Audio2.enabled = !!s.sound; if (s.rotor !== undefined) Audio2.rotorOn = !!s.rotor; } catch (e) { }
     this.sync();
     $('btnStart').onclick = () => { Audio2.unlock(); Audio2.play('ui'); this.startGame(); };
     $('btnDiff').onclick = () => { Game.diffIdx = (Game.diffIdx + 1) % 3; this.save(); this.sync(); Audio2.unlock(); Audio2.play('ui'); };
     $('btnMouse').onclick = $('btnPMouse').onclick = () => { Game.mouseSteer = !Game.mouseSteer; this.save(); this.sync(); Audio2.play('ui'); };
     $('btnFull').onclick = () => this.toggleFull();
     $('btnSound').onclick = $('btnPSound').onclick = () => { Audio2.unlock(); Audio2.setEnabled(!Audio2.enabled); this.save(); this.sync(); Audio2.play('ui'); };
+    $('btnRotor').onclick = $('btnPRotor').onclick = () => { Audio2.unlock(); this.toggleRotor(); };
     $('btnHelp').onclick = () => { this.helpReturn = 'main'; this.show('helpMenu'); };
     $('btnPHelp').onclick = () => { this.helpReturn = 'pause'; this.show('helpMenu'); };
     $('btnHelpBack').onclick = () => this.show(this.helpReturn === 'main' ? 'mainMenu' : 'pauseMenu');
@@ -4856,11 +4875,13 @@ const UI = {
     $('lnkLocal').onclick = e => { e.preventDefault(); this.duelKind = this.duelKind === 'local' ? 'auto' : 'local'; this.openDuel(); };
     document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && Game.state === 'play' && Game.mode === 'play') this.pause(); });
   },
-  save() { try { localStorage.setItem('rotorfront.settings', JSON.stringify({ diff: Game.diffIdx, mouse: Game.mouseSteer, sound: Audio2.enabled })); } catch (e) { } },
+  toggleRotor() { Audio2.rotorOn = !Audio2.rotorOn; this.save(); this.sync(); Audio2.play('ui'); if (Game.live) Game.msg('Heli-Sound ' + (Audio2.rotorOn ? 'an' : 'aus') + ' (Taste N)', 'info'); },
+  save() { try { localStorage.setItem('rotorfront.settings', JSON.stringify({ diff: Game.diffIdx, mouse: Game.mouseSteer, sound: Audio2.enabled, rotor: Audio2.rotorOn })); } catch (e) { } },
   sync() {
     this.el('valDiff').textContent = DIFFS[Game.diffIdx].name;
     this.el('valMouse').textContent = this.el('valPMouse').textContent = Game.mouseSteer ? 'An' : 'Aus';
     this.el('valSound').textContent = this.el('valPSound').textContent = Audio2.enabled ? 'An' : 'Aus';
+    this.el('valRotor').textContent = this.el('valPRotor').textContent = Audio2.rotorOn ? 'An' : 'Aus';
   },
   show(id) {
     for (const m of ['mainMenu', 'pauseMenu', 'helpMenu', 'resultMenu', 'duelMenu']) this.el(m).hidden = m !== id;
@@ -4951,6 +4972,7 @@ const Main = {
     const ctrl = { tvx: 0, tvy: 0, sx: false, sy: false, fire: false, bomb: false, missile: false, turn: false, drop: false };
     const act = { ctrl, buy: I.buyQueue.slice(), clickBuy: -1, pause: I.hit('Escape') };
     if (I.hit('F11')) UI.toggleFull();
+    if (I.hit('KeyN')) UI.toggleRotor();
     // HUD-Maus
     const hudP = Render.screenToHud(m.sx, m.sy);
     HUD.hover = (G.mode === 'play' && m.inside) ? HUD.hitSlot(hudP.x, hudP.y) : -1;
