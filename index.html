@@ -254,10 +254,13 @@ const Input = {
   wheel: 0, anyKeyT: 0, lastArrowT: -99, locked: false,
   gamepad: null,
   init(canvas) {
-    const prevent = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Tab', 'ShiftLeft', 'ControlLeft', 'F11']);
+    const prevent = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Tab', 'ShiftLeft', 'ControlLeft']);
     window.addEventListener('keydown', e => {
       if (prevent.has(e.code)) e.preventDefault();
+      // F11: Vollbild über die Fullscreen-API (falls erlaubt), sonst übernimmt der Browser
+      if (e.code === 'F11' && document.fullscreenEnabled) { e.preventDefault(); if (!e.repeat) UI.toggleFull(); return; }
       if (e.repeat) return;
+      if (e.code !== 'Escape' && !this.locked && UI.wantLock()) UI.lockMouse();   // Tastendruck zählt als Nutzer-Geste
       this.down.add(e.code); this.pressed.add(e.code);
       this.anyKeyT = performance.now();
       if (e.code.startsWith('Arrow')) this.lastArrowT = performance.now() / 1000;
@@ -288,9 +291,10 @@ const Input = {
       m.buttons |= (1 << e.button); m.pressedBtns.add(e.button);
       if (e.button >= 1) e.preventDefault();
       canvas.focus(); Audio2.unlock();
-      if (!this.locked && UI.wantLock()) UI.lockMouse();
+      if (!this.locked && UI.wantLock()) UI.lockMouse(true);
     });
     window.addEventListener('mouseup', e => { m.buttons &= ~(1 << e.button); if (e.button >= 3) e.preventDefault(); });
+    document.addEventListener('pointerlockerror', () => UI.lockFailed());
     document.addEventListener('pointerlockchange', () => {
       const was = this.locked;
       this.locked = document.pointerLockElement === canvas;
@@ -1728,7 +1732,7 @@ const DIFFS = [
 const BOUNTY = { tank: 25, dteam: 60, aa: 30, patriot: 120, ultra: 150, goliath: 150, marine: 5, eng: 15, heli: 100, fuel: 60, bunker: 40, tower: 40, nest: 30, baseflak: 150 };
 const HELI_PRICE_STEP = 100; // jeder weitere Ersatzhubschrauber kostet 100 $ mehr
 const MISSILE_COST = 30; // Preis je nachgeladener Heli-Lenkrakete
-const START_MONEY = 260, SUPPLY_MAX = 30, QUEUE_MAX = 5, SPAWN_INTERVAL = 1.2;
+const START_MONEY = 260, SUPPLY_MAX = 50, QUEUE_MAX = 5, SPAWN_INTERVAL = 1.2;
 const HELI_VX = 250, HELI_VY = 170;
 
 // Positionen der Basisteile (Team Blau; Rot gespiegelt)
@@ -2116,6 +2120,7 @@ class Engineer extends Infantry {
       if (this.buildT <= 0) this.finishBuild();
       return;
     }
+    if (this.dropped) { this.droppedStep(dt); return; }
     if (!this.site || this.retryT <= 0) { this.site = this.chooseSite(); this.retryT = 2; }
     if (!this.site) { // warten am Basisausgang
       const hold = bx(this.team, 660);
@@ -2129,13 +2134,45 @@ class Engineer extends Infantry {
     this.faceDir = sign(dx);
     this.x += sign(dx) * MARCH * dt; this.moving = true;
   }
+  // Abgesetzter Engineer: läuft immer Richtung Feindbasis. Steht ein eigener Ballonturm ohne Flak in der Nähe,
+  // baut er die Flak daneben; sonst baut er den Turm, sobald der Mindestabstand (700 px) zum letzten Turm erreicht ist.
+  droppedStep(dt) {
+    const team = this.team, dir = DIR[team];
+    this.dir = dir; this.faceDir = dir;
+    if (this.site && this.site.type === 'nest' && (!this.site.tower || this.site.tower.dead || this.site.tower.nest)) this.site = null;
+    if (!this.site) {
+      const own = Game.buildings.filter(b => b.kind === 'tower' && !b.dead && b.team === team);
+      const near = own.filter(t => Math.abs(t.x - this.x) < 700).sort((a, b) => Math.abs(a.x - this.x) - Math.abs(b.x - this.x))[0];
+      const planned = t => t.nestPlanned && t.nestPlanned !== this && !t.nestPlanned.dead && !t.nestPlanned.inside;
+      if (near && !near.nest && !planned(near)) { this.site = { type: 'nest', x: near.x + dir * 48, tower: near }; near.nestPlanned = this; }
+      else {
+        const towers = Game.buildings.filter(b => b.kind === 'tower' && !b.dead);
+        const limit = bx(1 - team, 640);                       // nicht in die Feindbasis hineinlaufen
+        const atLimit = (this.x - limit) * dir >= 0;
+        const free = !towers.some(t => Math.abs(t.x - this.x) < (t.team === team ? 700 : 120))
+          && !Game.bunkers.some(b => Math.abs(b.x - this.x) < 80)
+          && !Game.buildings.some(b => b.kind === 'nest' && Math.abs(b.x - this.x) < 40);
+        if (free || atLimit) this.site = { type: 'tower', x: this.x };
+      }
+    }
+    if (this.site) {
+      const dx = this.site.x - this.x;
+      if (Math.abs(dx) < 3) {
+        this.state = 'build'; this.buildT = this.site.type === 'tower' ? 7 : 5; Audio2.play('ui', this.x, 0.3);
+        return;
+      }
+      this.faceDir = sign(dx); this.x += sign(dx) * MARCH * dt; this.moving = true;
+      return;
+    }
+    this.x += dir * MARCH * dt; this.moving = true;
+  }
   chooseSite() {
     const team = this.team, dir = this.dir, front = Game.frontX();
     const towers = Game.buildings.filter(b => b.kind === 'tower' && !b.dead);
     const ownSide = x => (x - front) * dir < -90 && Math.abs(x - bx(team, 260)) > 620;
     // 1) eigener Turm ohne Flak-Nest -> Nest dahinter bauen
     for (const t of towers) {
-      if (t.team !== team || t.nest || t.nestPlanned) continue;
+      if (t.team !== team || t.nest || (t.nestPlanned && t.nestPlanned !== this && !t.nestPlanned.dead && !t.nestPlanned.inside)) continue;
       const x = t.x - dir * 48;
       if (ownSide(t.x)) return { type: 'nest', x, tower: t };
     }
@@ -2220,7 +2257,7 @@ class AntiAir extends Unit {
 // ---------- Patriot ----------
 const SAM_RANGE = 14 * VEH_LEN, PATRIOT_KEEP = 820, PATRIOT_INTERVAL = 7, PATRIOT_MAX_AIR = 2;
 class Patriot extends Unit {
-  constructor(team, x) { super(team, x, 'patriot'); this.hp = this.maxHp = 200; this.w = 46; this.h = 18; this.support = true; this.ammo = 10; this.elev = 0.1; this.returning = false; }
+  constructor(team, x) { super(team, x, 'patriot'); this.hp = this.maxHp = 400; this.w = 46; this.h = 18; this.support = true; this.ammo = 10; this.elev = 0.1; this.returning = false; }
   think(dt) {
     if (this.disguised && this.disguiseStep(dt)) return;
     if (this.ammo <= 0) {
@@ -3544,6 +3581,7 @@ class Heli {
   }
   spawnPax(p) {
     const u = p.type === 'eng' ? new Engineer(this.team, this.x) : new Marine(this.team, this.x, p.squad);
+    if (p.type === 'eng') u.dropped = true;   // aus dem Heli abgesetzt: eigene Baulogik
     u.hp = Math.min(u.maxHp, p.hp || u.maxHp);
     Game.units.push(u);
     return u;
@@ -4557,6 +4595,7 @@ const HUD = {
   C: { panel: 'rgba(10,16,26,0.78)', line: 'rgba(150,180,210,0.22)', text: '#e3e9f0', muted: '#8a98aa', amber: '#f3b43a', red: '#ff5d52', green: '#72d68c', blue: '#6ea4ee', yellow: '#f1d046' },
   f(size, weight = 600) { return `${weight} ${size}px ${this.font}`; },
   panel(ctx, x, y, w, h) {
+    (this.rects || (this.rects = [])).push([x, y, w, h]);
     ctx.fillStyle = this.C.panel; ctx.fillRect(x, y, w, h);
     ctx.strokeStyle = this.C.line; ctx.lineWidth = 1.5; ctx.strokeRect(x + 0.75, y + 0.75, w - 1.5, h - 1.5);
     ctx.fillStyle = this.C.amber; ctx.fillRect(x, y, 4, h);
@@ -4573,6 +4612,7 @@ const HUD = {
   },
   draw(ctx) {
     const G = Game;
+    this.rects = [];
     if (G.mode === 'demo') return;
     if (Net.role) this.drawNet(ctx);
     if (G.state === 'result') { this.drawMinimap(ctx, true); return; }
@@ -4856,6 +4896,9 @@ const HUD = {
     return -1;
   },
   overPanel(hx, hy) { // Maus über HUD-Panel? (dann kein Heli-Zielen)
+    if (hx < 0 || hy < 0 || hx > HUD_W || hy > HUD_H) return true;          // schwarze Ränder
+    const m = 10;
+    for (const [x, y, w, h] of (this.rects || [])) if (hx > x - m && hx < x + w + m && hy > y - m && hy < y + h + m) return true;
     return (hy < 332 && hx > HUD_W - 610) || (hy < 240 && hx < 470);
   },
 };
@@ -4892,7 +4935,7 @@ const UI = {
     $('btnDuelStart').onclick = () => { clearInterval(this.duelPoll); Net.startHost(); this.hideAll(); };
     $('lnkLocal').onclick = e => { e.preventDefault(); this.duelKind = this.duelKind === 'local' ? 'auto' : 'local'; this.openDuel(); };
     document.addEventListener('fullscreenchange', () => {
-      if (!document.fullscreenElement) { if (Game.state === 'play' && Game.mode === 'play') this.pause(); }
+      if (!this.isFull()) { if (Game.state === 'play' && Game.mode === 'play') this.pause(); }
       else if (this.wantLock()) this.lockMouse();
     });
   },
@@ -4906,8 +4949,15 @@ const UI = {
   },
   // ---------- Mausfang im Vollbild (Pointer Lock) ----------
   menuOpen() { return ['mainMenu', 'pauseMenu', 'helpMenu', 'resultMenu', 'duelMenu'].some(m => !this.el(m).hidden); },
-  wantLock() { return !!document.fullscreenElement && Game.live && Game.state === 'play' && !this.menuOpen(); },
-  lockMouse() {
+  // Vollbild: Fullscreen-API oder Browser-Vollbild (F11), bei dem das Fenster den ganzen Bildschirm füllt
+  isFull() { return !!document.fullscreenElement || (Math.abs(window.innerWidth - screen.width) <= 2 && Math.abs(window.innerHeight - screen.height) <= 2); },
+  lockFailed() {
+    if (this.lockWarned || !Game.live || !this.lockByClick) return; this.lockWarned = true;
+    Game.msg('Mausfang wird hier vom Browser blockiert – ZIP-Version nutzen oder ins Spielfeld klicken', 'warn');
+  },
+  wantLock() { return this.isFull() && Game.live && Game.state === 'play' && !this.menuOpen(); },
+  lockMouse(byClick) {
+    this.lockByClick = !!byClick;
     const c = this.el('game');
     if (!c.requestPointerLock || document.pointerLockElement === c) return;
     try { const p = c.requestPointerLock(); if (p && p.catch) p.catch(() => { }); } catch (e) { }
@@ -5009,11 +5059,10 @@ const Main = {
     const G = Game, I = Input, m = I.mouse, gp = I.gamepad;
     const ctrl = { tvx: 0, tvy: 0, sx: false, sy: false, fire: false, bomb: false, missile: false, turn: false, drop: false };
     const act = { ctrl, buy: I.buyQueue.slice(), clickBuy: -1, pause: I.hit('Escape') };
-    if (I.hit('F11')) UI.toggleFull();
     if (I.hit('KeyN')) UI.toggleRotor();
     // HUD-Maus
     const hudP = Render.screenToHud(m.sx, m.sy);
-    HUD.hover = (G.mode === 'play' && m.inside) ? HUD.hitSlot(hudP.x, hudP.y) : -1;
+    HUD.hover = (G.live && m.inside) ? HUD.hitSlot(hudP.x, hudP.y) : -1;
     if (I.btnHit(0) && HUD.hover >= 0) { act.clickBuy = HUD.hover; this.fireLock = true; }
     if (!I.btn(0)) this.fireLock = false;
     // Tastatur
@@ -5036,15 +5085,18 @@ const Main = {
     // Maussteuerung: Heli fliegt zum Zeiger
     const p = G.player;
     if (G.mouseSteer && G.mouseMode && m.inside && p && p.state === 'fly' && !(L || R || U || D)) {
-      const w = Render.screenToWorld(m.sx, m.sy);
-      const overHud = HUD.overPanel(hudP.x, hudP.y);
-      if (!overHud) {
+      let w = Render.screenToWorld(m.sx, m.sy);
+      const overHud = HUD.overPanel(hudP.x, hudP.y) || HUD.hover >= 0;
+      // Über Anzeigefeldern folgt der Heli dem Zeiger nicht, sondern bleibt an der Stelle stehen, an der der Zeiger das Panel erreicht hat
+      if (overHud) { if (!this.steerHold) this.steerHold = { x: p.x + p.vx * 0.35, y: p.y + p.vy * 0.3 }; w = this.steerHold; }
+      else this.steerHold = null;
+      {
         const dx = w.x - p.x, dy = w.y - p.y;
         if (Math.abs(dx) > 10) { ctrl.tvx = clamp(dx * 2.4, -HELI_VX, HELI_VX); ctrl.sx = true; }
         if (Math.abs(dy) > 10) { ctrl.tvy = clamp(dy * 2.6, -HELI_VY, HELI_VY); ctrl.sy = true; }
         // sanftes Aufsetzen in Bodennähe
         if (w.y > GROUND - 24 && p.alt < 60) ctrl.tvy = Math.min(ctrl.tvy, 70);
-        if (dx * p.facing < -34 && p.turnT <= 0 && Math.abs(dx) > 34) ctrl.turn = true;
+        if (!overHud && dx * p.facing < -34 && p.turnT <= 0 && Math.abs(dx) > 34) ctrl.turn = true;
       }
     }
     // Waffen
